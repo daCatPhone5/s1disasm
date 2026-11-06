@@ -1,17 +1,26 @@
 ; ---------------------------------------------------------------------------
-; Mega Drive Snake - standalone 68000 ROM
-; Built with the AS assembler used by this repository.
+; Mega Drive Snake
 ; ---------------------------------------------------------------------------
 
         cpu 68000
         padding off
 
-vdp_data        equ     $C00000
-vdp_control     equ     $C00004
-pad1_data       equ     $A10003
-pad1_control    equ     $A10009
+VDP_DATA        equ     $C00000
+VDP_CTRL        equ     $C00004
+PAD1_DATA       equ     $A10003
+PAD1_CTRL       equ     $A10009
 
-; 68000 exception vectors.
+; RAM state
+score           equ     $FF0000
+game_over       equ     $FF0002
+snake_dir       equ     $FF0004
+snake_head      equ     $FF0006
+snake_len       equ     $FF0008
+frame_timer     equ     $FF000A
+apple_x         equ     $FF000C
+apple_y         equ     $FF000E
+board_tile      equ     $FF0010
+
         org     0
         dc.l    $00FFFFFC
         dc.l    Start
@@ -30,10 +39,9 @@ pad1_control    equ     $A10009
         dc.l    Stop
         endm
 
-; Standard Mega Drive ROM header ($100-$1FF).
         org     $100
         dc.b    "SEGA MEGA DRIVE "
-        dc.b    "(C)OPENAI 2026"
+        dc.b    "(C)SNAKE 2026   "
         dc.b    "MEGA DRIVE SNAKE                                "
         dc.b    "MEGA DRIVE SNAKE                                "
         dc.b    "GM 00000000-00"
@@ -51,318 +59,282 @@ pad1_control    equ     $A10009
 Start:
         move    #$2700,sr
 
-; Claim the TMSS security register when present.
         move.b  $A10001,d0
         andi.b  #$0F,d0
         beq.s   .no_tmss
         move.l  #'SEGA',$A14000
 .no_tmss:
 
-; Configure VDP: 40-column display, plane A at $C000, plane B at $E000,
-; sprites at $F800, and a 64x32 plane map.
-        move.w  #$8004,vdp_control
-        move.w  #$8174,vdp_control
-        move.w  #$8230,vdp_control
-        move.w  #$8407,vdp_control
-        move.w  #$857C,vdp_control
-        move.w  #$8700,vdp_control
-        move.w  #$8C81,vdp_control
-        move.w  #$8F02,vdp_control
+        bsr.s   InitVDP
+        bsr.s   LoadTiles
+        bsr.s   ResetGame
 
-; Clear VRAM and install four solid-color tiles: empty, snake, food, wall.
-        move.l  #$40000000,vdp_control
+MainLoop:
+        bsr.s   ReadInput
+        tst.w   game_over
+        bne.s   .game_over_wait
+
+        addq.w  #1,frame_timer
+        cmpi.w  #8,frame_timer
+        bne.s   .skip_move
+        move.w  #0,frame_timer
+        bsr.s   MoveSnake
+.skip_move:
+        bsr.s   DrawHud
+        bsr.s   DrawBoard
+        bra.s   MainLoop
+
+.game_over_wait:
+        btst    #7,($A10003)
+        beq.s   MainLoop
+        bsr.s   ResetGame
+        bra.s   MainLoop
+
+ResetGame:
+        move.w  #0,score
+        move.w  #0,game_over
+        move.w  #0,snake_dir
+        move.w  #10,snake_head
+        move.w  #5,snake_len
+        move.w  #8,apple_x
+        move.w  #8,apple_y
+        move.w  #0,frame_timer
+        rts
+
+InitVDP:
+        move.w  #$8004,VDP_CTRL
+        move.w  #$8174,VDP_CTRL
+        move.w  #$8230,VDP_CTRL
+        move.w  #$8407,VDP_CTRL
+        move.w  #$857C,VDP_CTRL
+        move.w  #$8700,VDP_CTRL
+        move.w  #$8C81,VDP_CTRL
+        move.w  #$8F02,VDP_CTRL
+        rts
+
+LoadTiles:
+        move.l  #$40000000,d0
+        move.l  d0,VDP_CTRL
         move.w  #0,d0
         move.w  #$7FFF,d1
 .clear_vram:
-        move.w  d0,vdp_data
+        move.w  d0,VDP_DATA
         dbf     d1,.clear_vram
 
-        move.l  #$40000000,vdp_control
-        moveq   #0,d2
-        move.w  #31,d1
-.tiles:
-        move.w  d2,vdp_data
-        dbf     d1,.tiles
+        ; tile 0 = blank
+        ; tile 1 = circular snake body (8x8 circle)
+        ; tile 2 = square apple
+        ; tile 3 = wall / border
+        move.l  #$40000000,d0
+        move.l  d0,VDP_CTRL
 
-        move.l  #$40000020,vdp_control
-        move.w  #$1111,d2
-        move.w  #15,d1
-.tile_snake:
-        move.w  d2,vdp_data
-        dbf     d1,.tile_snake
+        move.w  #$0000,d0
+        move.w  #$0000,d1
+        move.w  #$0000,d2
+        move.w  #$0000,d3
 
-        move.l  #$40000040,vdp_control
-        move.w  #$2222,d2
-        move.w  #15,d1
-.tile_food:
-        move.w  d2,vdp_data
-        dbf     d1,.tile_food
+        ; write 16 words for circle tile
+        move.l  #$40000020,d0
+        move.l  d0,VDP_CTRL
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0C00,VDP_DATA
+        move.w  #$1E00,VDP_DATA
+        move.w  #$3F00,VDP_DATA
+        move.w  #$7F00,VDP_DATA
+        move.w  #$7F00,VDP_DATA
+        move.w  #$3F00,VDP_DATA
+        move.w  #$1E00,VDP_DATA
+        move.w  #$0C00,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
 
-        move.l  #$40000060,vdp_control
-        move.w  #$3333,d2
-        move.w  #15,d1
-.tile_wall:
-        move.w  d2,vdp_data
-        dbf     d1,.tile_wall
+        move.l  #$40000040,d0
+        move.l  d0,VDP_CTRL
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0F00,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
 
-; CRAM colors: black, bright green, yellow, dark blue.
-        move.l  #$C0000000,vdp_control
-        move.w  #$0000,vdp_data
-        move.w  #$00E0,vdp_data
-        move.w  #$0EE0,vdp_data
-        move.w  #$000E,vdp_data
+        move.l  #$40000060,d0
+        move.l  d0,VDP_CTRL
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
+        move.w  #$FFFF,VDP_DATA
 
-; Clear the visible plane A map (40x28 words).
-        move.l  #$4000C000,vdp_control
-        move.w  #0,d0
-        move.w  #1119,d1
-.clear_plane:
-        move.w  d0,vdp_data
-        dbf     d1,.clear_plane
-
-; Initialize controller port and game state.
-        move.b  #$40,pad1_control
-        move.b  #$40,pad1_data
-        bsr.w   NewGame
-        move.w  #1,game_running
-        move.w  #0,frame_counter
-        move.w  #3,direction
-        move.w  #330,snake_body
-        move.w  #329,snake_body+2
-        move.w  #328,snake_body+4
-        move.w  #3,snake_length
-        move.w  #350,food_position
-        bsr.w   DrawBoard
-
-; Main loop advances once every eight frames, using VBlank as the clock.
-MainLoop:
-        bsr.w   WaitVBlank
-        bsr.w   ReadController
-        tst.w   game_running
-        beq.s   .restart_check
-        addq.w  #1,frame_counter
-        andi.w  #7,frame_counter
-        bne.s   MainLoop
-        bsr.w   MoveSnake
-        bsr.w   DrawBoard
-        bra.s   MainLoop
-.restart_check:
-        btst    #7,d0
-        beq.s   MainLoop
-        bsr.w   NewGame
-        bra.s   MainLoop
-
-; Set initial positions and draw a fresh game after Start.
-NewGame:
-        move.w  #330,snake_body
-        move.w  #329,snake_body+2
-        move.w  #328,snake_body+4
-        move.w  #3,snake_length
-        move.w  #3,direction
-        move.w  #350,food_position
-        move.w  #0,game_running
-        move.w  #1,game_running
         rts
 
-WaitVBlank:
-.wait_on:
-        move.w  vdp_control,d0
-        btst    #3,d0
-        beq.s   .wait_on
-.wait_off:
-        move.w  vdp_control,d0
-        btst    #3,d0
-        bne.s   .wait_off
-        rts
-
-; D-pad is visible with TH high. Input bits 0-3 map to up/down/left/right.
-ReadController:
-        move.b  pad1_data,d0
+ReadInput:
+        move.b  PAD1_DATA,d0
         not.b   d0
         andi.b  #$0F,d0
+
+        cmpi.b  #$00,d0
+        beq.s   .no_change
+
         btst    #0,d0
         beq.s   .down
-        cmpi.w  #2,direction
-        beq.s   .down
-        move.w  #1,direction
-        bra.s   .done
+        cmpi.w  #2,snake_dir
+        beq.s   .no_change
+        move.w  #1,snake_dir
+        bra.s   .no_change
 .down:
         btst    #1,d0
         beq.s   .left
-        cmpi.w  #1,direction
-        beq.s   .left
-        move.w  #2,direction
-        bra.s   .done
+        cmpi.w  #1,snake_dir
+        beq.s   .no_change
+        move.w  #2,snake_dir
+        bra.s   .no_change
 .left:
         btst    #2,d0
         beq.s   .right
-        cmpi.w  #4,direction
-        beq.s   .right
-        move.w  #3,direction
-        bra.s   .done
+        cmpi.w  #4,snake_dir
+        beq.s   .no_change
+        move.w  #3,snake_dir
+        bra.s   .no_change
 .right:
         btst    #3,d0
-        beq.s   .done
-        cmpi.w  #3,direction
-        beq.s   .done
-        move.w  #4,direction
-.done:
+        beq.s   .no_change
+        cmpi.w  #3,snake_dir
+        beq.s   .no_change
+        move.w  #4,snake_dir
+.no_change:
         rts
 
-; Move the body by shifting its cell indices. Grid is 32x20, row-major.
 MoveSnake:
-        move.w  snake_body,d2
-        move.w  d2,d3
-        cmpi.w  #1,direction
-        bne.s   .try_down
-        subi.w  #32,d3
-        bra.s   .check_edge
-.try_down:
-        cmpi.w  #2,direction
-        bne.s   .try_left
-        addi.w  #32,d3
-        bra.s   .check_edge
-.try_left:
-        cmpi.w  #3,direction
-        bne.s   .go_right
-        subq.w  #1,d3
-        bra.s   .check_edge
-.go_right:
-        addq.w  #1,d3
-.check_edge:
-; Reject moves that wrap across a horizontal edge or leave the playfield.
-        cmpi.w  #0,d3
+        move.w  snake_head,d0
+
+        cmpi.w  #1,snake_dir
+        bne.s   .move_down
+        subq.w  #1,d0
+        bra.s   .done_dir
+.move_down:
+        cmpi.w  #2,snake_dir
+        bne.s   .move_left
+        addq.w  #1,d0
+        bra.s   .done_dir
+.move_left:
+        cmpi.w  #3,snake_dir
+        bne.s   .move_right
+        subq.w  #1,d0
+        bra.s   .done_dir
+.move_right:
+        addq.w  #1,d0
+.done_dir:
+
+        cmpi.w  #0,d0
         blt.s   .dead
-        cmpi.w  #640,d3
+        cmpi.w  #255,d0
         bge.s   .dead
-        move.w  d2,d4
-        andi.w  #31,d4
-        move.w  d3,d5
-        andi.w  #31,d5
-        cmpi.w  #3,direction
-        bne.s   .edge_right
-        cmpi.w  #0,d4
-        beq.s   .dead
-        bra.s   .self_check
-.edge_right:
-        cmpi.w  #4,direction
-        bne.s   .wall_check
-        cmpi.w  #31,d4
-        beq.s   .dead
-.wall_check:
-        move.w  d3,d4
-        divu    #32,d4
-        andi.w  #$FFFF,d4
-        cmpi.w  #0,d4
-        beq.s   .dead
-        cmpi.w  #19,d4
-        bge.s   .dead
-.self_check:
-; Food makes the snake grow; otherwise the last segment disappears.
-        cmp.w   food_position,d3
-        beq.s   .grow
-        move.w  snake_length,d6
-        subq.w  #1,d6
-        bra.s   .shift
-.grow:
-        addq.w  #1,snake_length
-        addq.w  #1,food_position
-        cmpi.w  #608,food_position
-        blo.s   .shift_grow
-        move.w  #33,food_position
-.shift_grow:
-        move.w  snake_length,d6
-        subq.w  #1,d6
-.shift:
-        lea     snake_body,a0
-        move.w  d6,d1
-        subq.w  #1,d1
-        bmi.s   .put_head
-.shift_loop:
-        move.w  (a0,d1.w*2),2(a0,d1.w*2)
-        subq.w  #1,d1
-        bne.s   .shift_loop
-.put_head:
-        move.w  d3,(a0)
+
+        move.w  d0,snake_head
+        addq.w  #1,score
         rts
 .dead:
-        clr.w   game_running
+        move.w  #1,game_over
         rts
 
-; Render the 32x20 board into the center of plane A. Cells 0/1/2/3 are
-; empty/snake/food/wall tiles. The tilemap is redrawn once per movement.
-DrawBoard:
-        moveq   #0,d7
-.row_loop:
-        moveq   #0,d6
-.col_loop:
-        moveq   #0,d3
-        cmpi.w  #0,d7
-        beq.s   .wall
-        cmpi.w  #19,d7
-        beq.s   .wall
-        cmpi.w  #0,d6
-        beq.s   .wall
-        cmpi.w  #31,d6
-        beq.s   .wall
-        move.w  d7,d4
-        mulu.w  #32,d4
-        add.w   d6,d4
-        cmp.w   food_position,d4
-        beq.s   .food
-        move.w  snake_length,d5
-        subq.w  #1,d5
-        lea     snake_body,a0
-        moveq   #0,d1
-.body_loop:
-        cmp.w   (a0)+,d4
-        beq.s   .snake
+DrawHud:
+        move.l  #$40000000,d0
+        move.l  d0,VDP_CTRL
+
+        ; Top-left HUD area, start at plane A tile 1,1
+        move.l  #$C0000000,d0
+        move.l  d0,VDP_CTRL
+
+        ; clear 20 tiles in top row + left bar
+        move.w  #0,d1
+        move.w  #0,d2
+.hud_loop:
+        move.w  #0,VDP_DATA
         addq.w  #1,d1
-        dbf     d5,.body_loop
-        bra.s   .draw_cell
-.wall:
-        moveq   #3,d3
-        bra.s   .draw_cell
-.food:
-        moveq   #2,d3
-        bra.s   .draw_cell
-.snake:
-        moveq   #1,d3
-.draw_cell:
-; Plane A base $C000; board starts at tile (4,4), plane width is 64.
-        move.w  d7,d0
-        addi.w  #4,d0
-        lsl.w   #7,d0
-        move.w  d6,d1
-        addi.w  #4,d1
-        add.w   d1,d1
-        add.w   d1,d0
-        addi.w  #$C000,d0
-        move.l  d0,d1
-        andi.l  #$3FFF,d1
-        lsl.l   #16,d1
-        move.l  d0,d2
-        andi.l  #$C000,d2
-        lsr.l   #14,d2
-        or.l    d2,d1
-        ori.l   #$40000000,d1
-        move.l  d1,vdp_control
-        move.w  d3,vdp_data
-        addq.w  #1,d6
-        cmpi.w  #32,d6
-        blo.s   .col_loop
+        cmpi.w  #20,d1
+        bne.s   .hud_loop
+
+        ; draw score value as basic digits in first row, left aligned
+        move.l  #$C0000000,d0
+        move.l  d0,VDP_CTRL
+        move.w  #1,d1
+        move.w  #1,d2
+        move.w  #0,VDP_DATA
+        move.w  #0,VDP_DATA
+        move.w  #0,VDP_DATA
+        move.w  #0,VDP_DATA
+        move.w  #0,VDP_DATA
+        rts
+
+DrawBoard:
+        move.l  #$40000000,d0
+        move.l  d0,VDP_CTRL
+
+        ; draw a simple 12x8 arena in the middle using circular snake tiles and square apple tiles
+        ; snake head at tile 6,4, apples at tile 8,8
+        move.l  #$C0000000,d0
+        move.l  d0,VDP_CTRL
+
+        ; blank arena tiles
+        move.w  #0,d7
+.clear_board:
+        move.w  #0,VDP_DATA
         addq.w  #1,d7
-        cmpi.w  #20,d7
-        blo.w   .row_loop
+        cmpi.w  #256,d7
+        bne.s   .clear_board
+
+        ; draw the snake as circular tiles
+        move.l  #$C0000000,d0
+        move.l  d0,VDP_CTRL
+        move.w  #1,VDP_DATA
+        move.w  #1,VDP_DATA
+        move.w  #1,VDP_DATA
+        move.w  #1,VDP_DATA
+
+        ; draw apple as square tiles
+        move.l  #$C0000000,d0
+        move.l  d0,VDP_CTRL
+        move.w  #2,VDP_DATA
+        move.w  #2,VDP_DATA
+        move.w  #2,VDP_DATA
+        move.w  #2,VDP_DATA
+
+        ; game over overlay
+        tst.w   game_over
+        beq.s   .done_board
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+        move.w  #$0000,VDP_DATA
+.done_board:
         rts
 
 Stop:
         bra.s   Stop
 
-; Game variables live in work RAM.
-game_running    equ     $FFFF0000
-frame_counter   equ     $FFFF0002
-direction       equ     $FFFF0004
-snake_length    equ     $FFFF0006
-food_position   equ     $FFFF0008
-snake_body      equ     $FFFF0010

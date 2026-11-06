@@ -1,13 +1,15 @@
 # Mega Drive Snake
 
-This branch now builds a small, standalone Snake game for the Sega Mega Drive / Genesis instead of building the Sonic 1 ROM. The old Sonic disassembly and assets are still present in the repository, but are no longer part of the build.
+This repo has been repurposed into a standalone Sega Mega Drive / Genesis Snake game using the same build tools already present in the repository.
 
 ## Build
 
-Run `build.bat` on Windows, or run `lua build.lua` where Lua is installed. The build uses the AS assembler and `p2bin` already included under `build_tools/` and produces `snake.bin`.
+Run `build.bat` on Windows or `lua build.lua` with Lua installed. The build produces a ROM named `snake.bin`.
 
-## Controls
+## Features
 
-Use the controller D-pad to steer. Press Start to restart after a crash.
-
-The game uses the Mega Drive's 68000 CPU, VDP tile planes, and controller port directly; it does not use Sonic 1 code or graphics.
+- top-left score display
+- game over overlay
+- snake drawn as circular tiles
+- apples drawn as square tiles
+- playable D-pad movement loop
