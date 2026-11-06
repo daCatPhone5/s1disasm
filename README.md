@@ -1,10 +1,13 @@
-# Sonic the Hedgehog (16-bit) Disassembly
+# Mega Drive Snake
 
-For an overview of the folder structure, [refer to this page](https://info.sonicretro.org/SCHG_How-to:Disassembly_Folder_Structure#Sonic_1).
+This branch now builds a small, standalone Snake game for the Sega Mega Drive / Genesis instead of building the Sonic 1 ROM. The old Sonic disassembly and assets are still present in the repository, but are no longer part of the build.
 
-Also See: http://info.sonicretro.org/Disassemblies
+## Build
 
-# DISCLAIMER
-Any and all content presented in this repository is presented for informational and educational purposes only.
-Commercial usage is expressly prohibited. Sonic Retro claims no ownership of any code in these repositories.
-You assume any and all responsibility for using this content responsibly. Sonic Retro claims no responsibility or warranty.
+Run `build.bat` on Windows, or run `lua build.lua` where Lua is installed. The build uses the AS assembler and `p2bin` already included under `build_tools/` and produces `snake.bin`.
+
+## Controls
+
+Use the controller D-pad to steer. Press Start to restart after a crash.
+
+The game uses the Mega Drive's 68000 CPU, VDP tile planes, and controller port directly; it does not use Sonic 1 code or graphics.
